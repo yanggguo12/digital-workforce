@@ -1,0 +1,103 @@
+{
+  "entities": {
+    "Order": {
+      "title": "Sales Order",
+      "description": "Represents a sales order extracted from a contract or manually entered.",
+      "type": "object",
+      "properties": {
+        "contractNumber": { "type": "string" },
+        "customerName": { "type": "string" },
+        "customerTaxId": { "type": "string" },
+        "orderDate": { "type": "string" },
+        "paymentTerms": { "type": "string" },
+        "totalAmount": { "type": "number" },
+        "currency": { "type": "string" },
+        "shippingAddress": { "type": "string" },
+        "contactPerson": { "type": "string" },
+        "contactPhone": { "type": "string" },
+        "plannedDeliveryDate": { "type": "string" },
+        "createdAtDate": { "type": "string" },
+        "createdAtTime": { "type": "string" },
+        "status": { "type": "string", "enum": ["draft", "synced"] },
+        "attachments": { "type": "array", "items": { "type": "string" } },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "materialNumber": { "type": "string" },
+              "name": { "type": "string" },
+              "quantity": { "type": "number" },
+              "unit": { "type": "string" },
+              "plannedDeliveryDate": { "type": "string" },
+              "unitPriceNet": { "type": "number" },
+              "amountNet": { "type": "number" },
+              "taxAmount": { "type": "number" },
+              "taxRate": { "type": "number" },
+              "totalAmount": { "type": "number" }
+            }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["contractNumber", "customerName", "status", "items"]
+    },
+    "Log": {
+      "title": "Execution Log",
+      "description": "Represents a system execution log entry.",
+      "type": "object",
+      "properties": {
+        "module": { "type": "string" },
+        "action": { "type": "string" },
+        "status": { "type": "string", "enum": ["success", "warning", "error", "pending"] },
+        "details": { "type": "string" },
+        "sapDoc": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["module", "action", "status", "timestamp"]
+    },
+    "ChatMessage": {
+      "title": "Chat Message",
+      "description": "Represents a message in the AI assistant chat.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "role": { "type": "string", "enum": ["user", "assistant", "system"] },
+        "content": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "agent": { "type": "string" },
+        "file": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "type": { "type": "string" }
+          }
+        },
+        "quote": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "content": { "type": "string" },
+            "role": { "type": "string" }
+          }
+        }
+      },
+      "required": ["userId", "role", "content", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/orders/{orderId}": {
+      "schema": "Order",
+      "description": "Collection of sales orders"
+    },
+    "/logs/{logId}": {
+      "schema": "Log",
+      "description": "Collection of system execution logs"
+    },
+    "/chat_messages/{messageId}": {
+      "schema": "ChatMessage",
+      "description": "Collection of chat messages"
+    }
+  }
+}

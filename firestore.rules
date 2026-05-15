@@ -1,0 +1,106 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 0.1 Global Helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+    
+    function isOwner(userId) {
+      return isVerified() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // 1. Orders
+    match /orders/{orderId} {
+      allow get: if isOwner(existing().userId);
+      allow list: if isVerified() && existing().userId == request.auth.uid;
+      
+      allow create: if isVerified() 
+                   && isValidId(orderId)
+                   && incoming().userId == request.auth.uid
+                   && isValidOrder(incoming())
+                   && incoming().createdAt == request.time;
+      
+      allow update: if isOwner(existing().userId)
+                   && incoming().userId == existing().userId
+                   && isValidOrder(incoming())
+                   && incoming().updatedAt == request.time
+                   && (
+                     // Action: Update draft
+                     (existing().status in ['draft', 'Draft'] && incoming().diff(existing()).affectedKeys().hasOnly(['contractNumber', 'customerName', 'customerTaxId', 'orderDate', 'paymentTerms', 'totalAmount', 'currency', 'shippingAddress', 'contactPerson', 'contactPhone', 'plannedDeliveryDate', 'attachments', 'items', 'status', 'updatedAt', 'createdAtDate', 'createdAtTime'])) ||
+                     // Action: Syncing (terminal state transition)
+                     (existing().status in ['draft', 'Draft'] && incoming().status in ['synced', 'Synced'] && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt', 'contractNumber', 'customerName', 'customerTaxId', 'orderDate', 'paymentTerms', 'totalAmount', 'currency', 'shippingAddress', 'contactPerson', 'contactPhone', 'plannedDeliveryDate', 'attachments', 'items', 'createdAtDate', 'createdAtTime']))
+                   );
+      
+      allow delete: if isOwner(existing().userId) && (existing().status in ['draft', 'Draft']);
+    }
+
+    function isValidOrder(data) {
+      return data.keys().hasAll(['userId', 'contractNumber', 'customerName', 'status', 'items', 'createdAt', 'updatedAt'])
+        && data.userId == request.auth.uid
+        && data.contractNumber is string && data.contractNumber.size() <= 100
+        && data.customerName is string && data.customerName.size() <= 200
+        && data.status in ['draft', 'synced', 'Draft', 'Synced']
+        && data.items is list && data.items.size() <= 50
+        && (data.items.size() == 0 || (data.items[0].materialNumber is string && data.items[0].name is string));
+    }
+
+    // 2. Logs
+    match /logs/{logId} {
+      allow get: if isOwner(existing().userId);
+      allow list: if isVerified() && existing().userId == request.auth.uid;
+      allow create: if isVerified()
+                   && incoming().userId == request.auth.uid
+                   && isValidLog(incoming())
+                   && incoming().timestamp == request.time;
+    }
+
+    function isValidLog(data) {
+      return data.keys().hasAll(['userId', 'module', 'action', 'status', 'timestamp'])
+        && data.userId == request.auth.uid
+        && data.module is string && data.module.size() <= 64
+        && data.action is string && data.action.size() <= 128
+        && data.status in ['success', 'warning', 'error', 'pending']
+        && data.timestamp == request.time;
+    }
+
+    // 3. Chat Messages
+    match /chat_messages/{messageId} {
+      allow get: if isOwner(existing().userId);
+      allow list: if isVerified() && existing().userId == request.auth.uid;
+      allow create: if isVerified()
+                   && incoming().userId == request.auth.uid
+                   && isValidChatMessage(incoming())
+                   && incoming().timestamp == request.time;
+    }
+
+    function isValidChatMessage(data) {
+      return data.keys().hasAll(['userId', 'role', 'content', 'timestamp'])
+      && data.userId == request.auth.uid
+      && data.role in ['user', 'assistant', 'system']
+      && data.content is string && data.content.size() <= 10000
+      && data.timestamp == request.time;
+    }
+  }
+}
