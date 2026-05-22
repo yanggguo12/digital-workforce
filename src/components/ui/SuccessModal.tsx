@@ -80,7 +80,7 @@ export function SuccessModal({
                 确定
               </button>
               <button
-                onClick={() => onViewOrders?.("暂存中")}
+                onClick={() => onViewOrders?.(type === "synced" ? "SAP 已同步" : "暂存中")}
                 className="px-5 py-2 text-[13px] font-bold text-white bg-[#1677FF] rounded-[6px] hover:bg-[#0050B3] transition-all shadow-sm"
               >
                 前往合同管理中心

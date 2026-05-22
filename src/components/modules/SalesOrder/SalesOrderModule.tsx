@@ -123,7 +123,7 @@ export function SalesOrderModule({
   inputSource: "Upload" | "Email" | "Voice";
   initialData?: any;
   onClearInitial?: () => void;
-  onViewOrders?: () => void;
+  onViewOrders?: (tab?: string) => void;
 }) {
   const [tasks, setTasksState] = useState<DocumentTask[]>(() => {
     if (initialData) {
@@ -1055,6 +1055,15 @@ export function SalesOrderModule({
                   <span className="w-2 h-2 rounded-full bg-[#1677FF] animate-pulse" />
                   智能单据解析处理站
                </div>
+               <button 
+                  onClick={() => onViewOrders?.("全部条目")}
+                  className="ml-3 hover:text-[#1677FF] text-gray-500 hover:bg-[#1677FF]/5 border border-transparent hover:border-[#1677FF]/20 px-2.5 py-1 text-[11px] font-bold rounded-[2px] inline-flex items-center gap-1 transition-all cursor-pointer"
+                  title="前往合同管理中心，查看全部暂存/同步合同状态"
+               >
+                  <FileText size={12}/>
+                  <span>合同管理中心</span>
+                  <ChevronRight size={11} className="text-gray-400" />
+               </button>
             </div>
             {tasks.length > 0 && (
                <div className="flex items-center gap-2">
@@ -1214,6 +1223,14 @@ export function SalesOrderModule({
                            <Button variant="primary" size="sm" onClick={() => handleBatchAction("synced")} isLoading={isSaving} className="h-[28px] font-bold text-[10px] px-3 rounded-[2px] bg-[#1677FF] hover:bg-[#0050B3]">
                               <Send size={11} className="mr-1"/> 批量推送 SAP
                            </Button>
+                           <button
+                              onClick={() => onViewOrders?.("全部条目")}
+                              className="h-[28px] border border-[#1677FF]/40 text-[#1677FF] hover:text-[#0050B3] hover:border-[#1677FF] hover:bg-[#1677FF]/5 font-bold text-[10px] px-2.5 rounded-[2px] transition-all flex items-center gap-1 cursor-pointer bg-white"
+                              title="前往合同管理中心，查看全部合同"
+                           >
+                              <FileText size={11}/>
+                              <span>管理历史合同</span>
+                           </button>
                         </div>
                      </div>
                      <span className="text-[10px] text-gray-400 font-medium font-sans">✨ 批量操作将智能跳过置信度低于 95% 或存在解析状态异常的订单，防差错联锁兜底</span>
@@ -1488,21 +1505,52 @@ export function SalesOrderModule({
                        </div>
                      <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-4 gap-x-4 gap-y-2.5 bg-white p-3 border border-[#D1D5DB] rounded-[2px] shadow-sm">
                         {[
-                           { label: "合同号", value: activeTask.form.contractNumber, key: "contractNumber" },
+                           { label: "单据号", value: activeTask.form.id || `ORD-DEMO-${activeTask.id.substring(0, 8).toUpperCase()}`, key: "id" },
+                           { label: "单据创建日期", value: activeTask.form.createdAtDate || new Date().toISOString().split("T")[0], key: "createdAtDate" },
+                           { label: "单据创建时间", value: activeTask.form.createdAtTime || "09:00:00", key: "createdAtTime" },
+                           { label: "合同编号", value: activeTask.form.contractNumber, key: "contractNumber" },
                            { label: "客户名称", value: activeTask.form.customerName, key: "customerName" },
-                           { label: "客户税号", value: activeTask.form.customerTaxId, key: "customerTaxId" },
+                           { label: "客户税号", value: activeTask.form.customerTaxId || "未录入", key: "customerTaxId" },
                            { label: "订单日期", value: activeTask.form.orderDate, key: "orderDate" },
-                           { label: "付款方式", value: activeTask.form.paymentTerms, key: "paymentTerms" },
+                           { label: "付款条件", value: activeTask.form.paymentTerms, key: "paymentTerms" },
                            { label: "计划交期", value: activeTask.form.plannedDeliveryDate, key: "plannedDeliveryDate" },
                            { label: "送货地址", value: activeTask.form.shippingAddress, key: "shippingAddress" },
                            { label: "送货联系人", value: activeTask.form.contactPerson, key: "contactPerson" },
                            { label: "送货联系电话", value: activeTask.form.contactPhone, key: "contactPhone" },
+                           { 
+                             label: "合同不含税总金额", 
+                             value: (activeTask.form.currency || "CNY") === "CNY"
+                                ? activeTask.form.items.reduce((sum, item) => sum + item.amountNet, 0).toLocaleString("zh-CN", { minimumFractionDigits: 2 })
+                                : activeTask.form.items.reduce((sum, item) => sum + item.amountNet, 0).toFixed(2),
+                             key: "amountNet"
+                           },
+                           { 
+                             label: "合同税额总金额", 
+                             value: (activeTask.form.currency || "CNY") === "CNY"
+                                ? activeTask.form.items.reduce((sum, item) => sum + item.taxAmount, 0).toLocaleString("zh-CN", { minimumFractionDigits: 2 })
+                                : activeTask.form.items.reduce((sum, item) => sum + item.taxAmount, 0).toFixed(2),
+                             key: "taxAmount"
+                           },
+                           { 
+                             label: "合同总金额", 
+                             value: (activeTask.form.currency || "CNY") === "CNY"
+                                ? activeTask.form.items.reduce((sum, item) => sum + item.totalAmount, 0).toLocaleString("zh-CN", { minimumFractionDigits: 2 })
+                                : activeTask.form.items.reduce((sum, item) => sum + item.totalAmount, 0).toFixed(2),
+                             key: "totalAmount"
+                           },
+                           { label: "币种", value: activeTask.form.currency || "CNY", key: "currency" },
+                           { label: "SAP订单号", value: "尚未同步", key: "sapOrderNumber", highlight: true },
                         ].map(f => (
                            <div key={f.key} className="flex flex-col gap-1">
                               <label className="text-[10px] font-bold text-gray-400 flex items-center gap-1">
                                  {f.label}
                               </label>
-                              <div className="px-2 py-1.5 bg-[#F9FAFB] border border-[#E5E7EB] text-[12px] font-bold text-sap-gray-900 rounded-[2px] truncate">
+                              <div className={cn(
+                                 "px-2 py-1.5 border text-[12px] font-bold rounded-[2px] truncate",
+                                 f.highlight 
+                                    ? "bg-[#FFF2E8] border-[#FFBB96] text-[#D4380D]" 
+                                    : "bg-[#F9FAFB] border-[#E5E7EB] text-sap-gray-900"
+                              )}>
                                  {f.value || "--"}
                               </div>
                            </div>

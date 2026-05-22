@@ -695,6 +695,15 @@ export function OrdersModule({
                 <Button
                   variant="outline"
                   size="sm"
+                  className="h-[28px] text-[12px] px-3 font-bold border-[#1677FF]/40 text-[#1677FF] hover:text-[#0050B3] hover:border-[#1677FF] hover:bg-[#1677FF]/5 bg-white shadow-xs"
+                  leftIcon={<Paperclip size={14} />}
+                  onClick={(e) => handleOpenAttachments(e, viewOrder.id, viewOrder.attachments)}
+                >
+                  附件预览
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
                   className="h-[28px] text-[12px] px-3 font-bold"
                   leftIcon={<Download size={14} />}
                 >
@@ -743,7 +752,6 @@ export function OrdersModule({
                   <InfoField label="送货联系人" value={selectedOrder.contactPerson} />
                   <InfoField label="送货联系电话" value={selectedOrder.contactPhone} />
                   
-                  <InfoField label="附件" value="点击预览" isLink onLinkClick={(e: any) => handleOpenAttachments(e, selectedOrder.id, selectedOrder.attachments)} />
                   <InfoField label="合同不含税总金额" value={selectedOrder.currency === "CNY" ? (selectedOrder.items || []).reduce((s, i) => s + (i.amountNet || 0), 0)?.toLocaleString("zh-CN", { minimumFractionDigits: 2 }) : (selectedOrder.items || []).reduce((s, i) => s + (i.amountNet || 0), 0)?.toFixed(2)} />
                   <InfoField label="合同税额总金额" value={selectedOrder.currency === "CNY" ? (selectedOrder.items || []).reduce((s, i) => s + (i.taxAmount || 0), 0)?.toLocaleString("zh-CN", { minimumFractionDigits: 2 }) : (selectedOrder.items || []).reduce((s, i) => s + (i.taxAmount || 0), 0)?.toFixed(2)} />
                   <InfoField label="合同总金额" value={selectedOrder.currency === "CNY" ? totalOrderAmount?.toLocaleString("zh-CN", { minimumFractionDigits: 2 }) : totalOrderAmount?.toFixed(2)} />
