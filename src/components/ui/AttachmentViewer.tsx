@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, FileText, Image as ImageIcon, Music, Download, ExternalLink, Paperclip } from 'lucide-react';
 import { Button } from './Button';
@@ -7,23 +7,60 @@ interface AttachmentViewerProps {
   isOpen: boolean;
   onClose: () => void;
   attachments: string[];
+  orderId?: string;
 }
 
-export function AttachmentViewer({ isOpen, onClose, attachments }: AttachmentViewerProps) {
+export function AttachmentViewer({ isOpen, onClose, attachments, orderId }: AttachmentViewerProps) {
   const [activeIndex, setActiveIndex] = useState(0);
+  const [loadedAttachments, setLoadedAttachments] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    
+    const loadPersisted = async () => {
+      // If we have an order ID, try to load its real uploaded files from IndexedDB
+      if (orderId) {
+        setLoading(true);
+        try {
+          const { AttachmentStore } = await import('../../lib/attachmentDb');
+          const saved = await AttachmentStore.get(orderId);
+          if (saved && saved.length > 0) {
+            setLoadedAttachments(saved);
+            setLoading(false);
+            return;
+          }
+        } catch (err) {
+          console.error("Failed to load persistent attachments in viewer:", err);
+        }
+      }
+      setLoadedAttachments(attachments || []);
+      setLoading(false);
+    };
+
+    loadPersisted();
+    setActiveIndex(0); // Reset index on open
+  }, [isOpen, orderId, attachments]);
 
   if (!isOpen) return null;
 
-  const validAttachments = attachments?.length > 0 ? attachments : ['mock:未命名附件.pdf'];
-  const activeAtt = validAttachments[activeIndex];
+  const validAttachments = loadedAttachments?.length > 0 ? loadedAttachments : ['mock:未命名附件.pdf'];
+  const activeAtt = validAttachments[activeIndex] || '';
   
   const isVoice = activeAtt.includes('voice') || activeAtt.includes('.mp3');
-  const isImage = activeAtt.includes('image') || activeAtt.includes('.jpg') || activeAtt.includes('.png');
-  // Default string match for others, like PDF
+  const isRealData = activeAtt.startsWith('data:');
+  const isImage = activeAtt.includes('image') || activeAtt.includes('.jpg') || activeAtt.includes('.png') || isRealData;
 
-  // Mock a placeholder URL for display purposes
+  // Render the real uploaded preview
   let previewContent = null;
-  if (isVoice) {
+  if (loading) {
+    previewContent = (
+      <div className="h-full flex flex-col items-center justify-center text-gray-400 gap-3">
+         <div className="w-10 h-10 border-4 border-sap-blue border-t-transparent rounded-full animate-spin" />
+         <p className="text-xs font-bold text-gray-400">正在调取云端图像库...</p>
+      </div>
+    );
+  } else if (isVoice) {
     previewContent = (
       <div className="flex flex-col items-center justify-center p-12 bg-gray-50 rounded-2xl w-full h-full min-h-[300px]">
         <div className="w-24 h-24 bg-red-100 text-red-500 rounded-full flex items-center justify-center mb-6">
@@ -31,7 +68,7 @@ export function AttachmentViewer({ isOpen, onClose, attachments }: AttachmentVie
         </div>
         <p className="text-gray-900 font-bold text-lg mb-2">语音记录已就绪</p>
         <p className="text-gray-500 text-sm mb-6">该附件为音频文件，请下载或使用本地支持的播放器打开。</p>
-        <div className="w-full max-w-sm h-12 bg-white rounded-full border border-gray-200 flex items-center px-6 shadow-sm">
+        <div className="w-full max-sm h-12 bg-white rounded-full border border-gray-200 flex items-center px-6 shadow-sm">
            <div className="w-full h-1 bg-gray-200 rounded-full overflow-hidden">
              <div className="w-1/3 h-full bg-red-500 rounded-full"></div>
            </div>
@@ -41,31 +78,41 @@ export function AttachmentViewer({ isOpen, onClose, attachments }: AttachmentVie
     );
   } else if (isImage) {
     previewContent = (
-      <div className="w-full h-full flex items-center justify-center bg-gray-50 rounded-2xl overflow-hidden">
+      <div className="w-full h-full flex items-center justify-center bg-gray-100 rounded-2xl overflow-hidden p-4 min-h-[400px]">
         <img 
-          src="https://images.unsplash.com/photo-1616423640778-28d1b53229bd?auto=format&fit=crop&q=80&w=1200" 
+          src={isRealData ? activeAtt : "https://images.unsplash.com/photo-1616423640778-28d1b53229bd?auto=format&fit=crop&q=80&w=1200"} 
           alt="Preview" 
-          className="max-w-full max-h-[70vh] object-contain shadow-sm"
+          className="max-w-full max-h-[70vh] object-contain shadow-sm rounded border border-gray-200/50"
+          referrerPolicy="no-referrer"
         />
       </div>
     );
   } else {
     // PDF / File
     previewContent = (
-       <div className="w-full h-full flex items-center justify-center bg-gray-50 rounded-2xl overflow-hidden p-8 border border-gray-100">
+       <div className="w-full h-full flex items-center justify-center bg-gray-50 rounded-2xl overflow-hidden p-8 border border-gray-100 min-h-[400px]">
          <img 
           src="https://images.unsplash.com/photo-1568227451433-286e9275afba?auto=format&fit=crop&q=80&w=1200" 
           alt="PDF Preview" 
           className="max-w-full max-h-[70vh] object-contain shadow-lg border border-gray-200 rounded-sm"
+          referrerPolicy="no-referrer"
         />
        </div>
     );
   }
 
-  const getExt = (name: string) => {
+  const getExt = (name: string): "MP3" | "PNG" | "PDF" => {
     if (name.includes('voice') || name.includes('.mp3')) return 'MP3';
-    if (name.includes('image') || name.includes('.png')) return 'PNG';
+    if (name.includes('image') || name.includes('.png') || name.startsWith('data:image/')) return 'PNG';
     return 'PDF';
+  };
+
+  const getCleanName = (name: string, index: number) => {
+    if (!name) return `附件_${index + 1}`;
+    if (name.startsWith('data:')) {
+      return `单据页面 #${index + 1}`;
+    }
+    return name;
   };
 
   return (
@@ -114,8 +161,7 @@ export function AttachmentViewer({ isOpen, onClose, attachments }: AttachmentVie
                   {validAttachments.map((att, idx) => {
                     const isActive = idx === activeIndex;
                     const ext = getExt(att);
-                    let cleanName = att;
-                    if (!cleanName) { cleanName = "未命名附件_" + (idx+1); }
+                    const cleanName = getCleanName(att, idx);
                     
                     return (
                       <button 
@@ -132,7 +178,7 @@ export function AttachmentViewer({ isOpen, onClose, attachments }: AttachmentVie
                          </div>
                          <div className="flex-1 min-w-0 pr-2">
                            <p className={`text-sm font-bold truncate ${isActive ? 'text-sap-gray-900' : 'text-gray-600'}`}>{cleanName}</p>
-                           <p className="text-[11px] text-gray-400 font-mono mt-0.5">{ext} • 1.2 MB</p>
+                           <p className="text-[11px] text-gray-400 font-mono mt-0.5">{ext} • {isRealData ? (att.length * 0.75 / 1024 / 1024).toFixed(2) : '1.2'} MB</p>
                          </div>
                       </button>
                     )
@@ -145,10 +191,17 @@ export function AttachmentViewer({ isOpen, onClose, attachments }: AttachmentVie
             <div className="flex-1 bg-white p-4 lg:p-6 overflow-hidden relative">
               <div className="w-full h-full flex flex-col">
                  <div className="flex items-center justify-between mb-4">
-                   <h4 className="text-gray-900 font-bold truncate">
-                     {activeAtt || '未命名附件'}
+                   <h4 className="text-gray-900 font-bold truncate max-w-sm">
+                     {getCleanName(activeAtt, activeIndex)}
                    </h4>
-                   <Button variant="outline" className="h-8 px-3 text-xs" leftIcon={<ExternalLink size={14} />} onClick={() => window.open(window.location.href, '_blank')}>在新窗口打开</Button>
+                   <Button variant="outline" className="h-8 px-3 text-xs" leftIcon={<ExternalLink size={14} />} onClick={() => {
+                     if (isRealData) {
+                       const w = window.open();
+                       if (w) w.document.write(`<img src="${activeAtt}" style="max-width:100%; height:auto;" />`);
+                     } else {
+                       window.open(window.location.href, '_blank');
+                     }
+                   }}>在新窗口打开/预览</Button>
                  </div>
                  <div className="flex-1 overflow-auto rounded-2xl relative custom-scrollbar">
                    {previewContent}

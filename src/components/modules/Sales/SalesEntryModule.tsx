@@ -3,6 +3,7 @@ import { WorkstationModule, TileProps } from '../Workstation/WorkstationModule';
 import { FileUp, Mail, Mic2, Database, FileSpreadsheet, Library } from 'lucide-react';
 import { SalesOrderModule } from '../SalesOrder/SalesOrderModule';
 import { OrdersModule } from '../Orders/OrdersModule';
+import { getDemoOrders } from '../../../lib/mockData';
 
 interface SalesEntryModuleProps {
   onViewOrders?: () => void;
@@ -13,12 +14,16 @@ interface SalesEntryModuleProps {
 }
 
 const SalesEntryModule: React.FC<SalesEntryModuleProps> = ({ onViewOrders, initialData, onClearInitial, onResumeDraft, onNavigate }) => {
-  const [orderCount, setOrderCount] = React.useState(28);
+  const [orderCount, setOrderCount] = React.useState(0);
+  const [uploadCount, setUploadCount] = React.useState(0);
 
   React.useEffect(() => {
     const handleUpdate = () => {
-      setOrderCount(prev => prev + 1);
+      const orders = getDemoOrders();
+      setOrderCount(orders.length);
+      setUploadCount(orders.filter((o: any) => o.source === 'Upload').length);
     };
+    handleUpdate();
     window.addEventListener('demoOrdersUpdated', handleUpdate);
     return () => window.removeEventListener('demoOrdersUpdated', handleUpdate);
   }, []);
@@ -29,7 +34,7 @@ const SalesEntryModule: React.FC<SalesEntryModuleProps> = ({ onViewOrders, initi
       title: '文档/图片上传',
       description: '上传 PDF/图片合同文件，通过 AI 智能解析一键生成并同步至系统。',
       icon: <FileUp size={24} />,
-      kpiIndicator: "3 份新文档",
+      kpiIndicator: `${uploadCount > 0 ? uploadCount : 0} 份新文档`,
       onClick: () => onNavigate?.('sales-contract')
     },
     {

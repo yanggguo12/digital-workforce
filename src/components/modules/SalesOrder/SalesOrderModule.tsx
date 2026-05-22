@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   Upload, FileText, RefreshCcw, CheckCircle, AlertCircle, FileSearch,
-  Scan, Building2, Play, Cpu, Trash2, Send, Save, X, Plus, ChevronRight, Check
+  Scan, Building2, Play, Cpu, Trash2, Send, Save, X, Plus, ChevronRight, Check, Search, ChevronLeft
 } from "lucide-react";
 import { cn } from "@/src/lib/utils";
 import { AppState, SalesOrderData } from "@/src/types";
@@ -138,6 +138,16 @@ export function SalesOrderModule({
         confidence: 100
       }];
     }
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("persistent_upload_tasks");
+      if (saved) {
+        try {
+          return JSON.parse(saved);
+        } catch (e) {
+          console.warn("Failed to parse persistent_upload_tasks", e);
+        }
+      }
+    }
     return [];
   });
   
@@ -150,11 +160,83 @@ export function SalesOrderModule({
     });
   };
 
-  const [activeTaskId, setActiveTaskId] = useState<string | null>(initialData ? "initial" : null);
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(() => {
+    if (initialData) return "initial";
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("persistent_upload_tasks");
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          if (parsed && parsed.length > 0) {
+            return parsed[0].id;
+          }
+        } catch {}
+      }
+    }
+    return null;
+  });
+
+  // Save tasks to localStorage whenever they change
+  useEffect(() => {
+    if (tasks.length === 0) {
+      localStorage.removeItem("persistent_upload_tasks");
+      return;
+    }
+    const tasksMetadata = tasks.map(t => ({
+      id: t.id,
+      sourceType: t.sourceType,
+      status: t.status,
+      errorMsg: t.errorMsg,
+      contractNumber: t.contractNumber,
+      customerName: t.customerName,
+      confidence: t.confidence,
+      isDuplicate: t.isDuplicate,
+      form: t.form,
+    }));
+    localStorage.setItem("persistent_upload_tasks", JSON.stringify(tasksMetadata));
+  }, [tasks]);
+
+  const activeTask = tasks.find(t => t.id === activeTaskId);
+
+  // Dynamically load active task's preview images from IndexedDB if not loaded
+  useEffect(() => {
+    if (!activeTaskId || !activeTask) return;
+    if (activeTask.pdfPages && activeTask.pdfPages.length > 0) return;
+
+    let isCurrent = true;
+    const fetchPages = async () => {
+      try {
+        const { AttachmentStore } = await import("@/src/lib/attachmentDb");
+        const saved = await AttachmentStore.get('task-preview-' + activeTaskId);
+        if (saved && saved.length > 0 && isCurrent) {
+          updateTask(activeTaskId, { pdfPages: saved });
+        }
+      } catch (err) {
+        console.warn("Failed to retrieve persistent PDF/image pages:", err);
+      }
+    };
+    fetchPages();
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [activeTaskId]);
   const [showSuccess, setShowSuccess] = useState(false);
   const [successType, setSuccessType] = useState<"draft" | "synced">("synced");
   const [isSaving, setIsSaving] = useState(false);
   const [resultCounts, setResultCounts] = useState({ success: 0, fail: 0 });
+  const [sidebarFilter, setSidebarFilter] = useState<"all" | "processing" | "done" | "error">("all");
+  const [sidebarSearch, setSidebarSearch] = useState<string>("");
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+
+  // Automatically fold sidebar when a document preview is active
+  useEffect(() => {
+    if (activeTaskId !== null) {
+      setIsSidebarCollapsed(true);
+    } else {
+      setIsSidebarCollapsed(false);
+    }
+  }, [activeTaskId]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortControllers = useRef<Map<string, AbortController>>(new Map());
@@ -202,6 +284,16 @@ export function SalesOrderModule({
         customerName: file.name,
         sourceType: file.type.startsWith('image/') ? '图片文件' : 'PDF 文档'
       };
+
+      if (file.type.startsWith('image/')) {
+        try {
+          const { AttachmentStore } = await import("@/src/lib/attachmentDb");
+          await AttachmentStore.save('task-preview-' + id, [`data:${file.type};base64,${base64Data}`]);
+        } catch (err) {
+          console.warn("Failed to auto-persist image file:", err);
+        }
+      }
+
       return task;
     }));
 
@@ -301,6 +393,12 @@ export function SalesOrderModule({
         }
         renderedPages = pages;
         updateTask(id, { pdfPages: pages, isPdfRendering: false });
+        try {
+          const { AttachmentStore } = await import("@/src/lib/attachmentDb");
+          await AttachmentStore.save('task-preview-' + id, pages);
+        } catch (err) {
+          console.warn("Failed to persist rendered PDF pages:", err);
+        }
       }
 
       const apiKey = process.env.GEMINI_API_KEY;
@@ -398,7 +496,7 @@ export function SalesOrderModule({
 
       const res: any = await Promise.race([
         aiPromise,
-        new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 30000))
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 120000))
       ]);
 
       if (controller.signal.aborted) return;
@@ -509,7 +607,7 @@ export function SalesOrderModule({
       if (controller.signal.aborted) return;
       updateTask(id, { 
         status: "error", 
-        errorMsg: "解析繁忙或 30s 超时，请重试",
+        errorMsg: "解析繁忙或 120s 超时，请重试",
         contractNumber: "解析终止",
         form: null
       });
@@ -558,19 +656,45 @@ export function SalesOrderModule({
           }
           // CRITICAL: DO NOT MODIFY END
 
+          const fileInfo = globalFileCache.get(task.id);
+          let attachList: string[] = [];
+          if (task.pdfPages && task.pdfPages.length > 0) {
+            attachList = task.pdfPages;
+          } else if (fileInfo) {
+            attachList = [`data:${fileInfo.mimeType};base64,${fileInfo.base64Data}`];
+          }
+
+          const fileName = task.file?.name || (task.sourceType === 'PDF 文档' ? '订单合同.pdf' : '单据.png');
           const payload = {
             ...task.form,
             status: finalStatus,
+            attachments: [fileName],
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
             userId: auth.currentUser?.uid || "anonymous",
             confidence_score: task.confidence
           };
 
+          let orderId = "";
           if (auth.currentUser) {
-            await addDoc(collection(db, "orders"), payload).catch(() => saveDemoOrder(payload as any));
+            try {
+              const docRef = await addDoc(collection(db, "orders"), payload);
+              orderId = docRef.id;
+            } catch (err) {
+              const generatedId = `ORD-DEMO-${Date.now()}-${i}`;
+              const payloadWithId = { ...payload, id: generatedId };
+              orderId = saveDemoOrder(payloadWithId as any);
+            }
           } else {
-            saveDemoOrder(payload as any);
+            const generatedId = `ORD-DEMO-${Date.now()}-${i}`;
+            const payloadWithId = { ...payload, id: generatedId };
+            orderId = saveDemoOrder(payloadWithId as any);
+          }
+
+          // Save to IndexedDB
+          if (orderId && attachList.length > 0) {
+            const { AttachmentStore } = await import("../../../lib/attachmentDb");
+            await AttachmentStore.save(orderId, attachList);
           }
 
           createLog({
@@ -617,38 +741,25 @@ export function SalesOrderModule({
     globalFileCache.delete(id);
   };
 
-  const activeTask = tasks.find(t => t.id === activeTaskId);
+  const filteredTasks = tasks.filter(t => {
+    // 1. Status Filter
+    if (sidebarFilter === "processing" && t.status !== "processing" && t.status !== "pending") return false;
+    if (sidebarFilter === "done" && t.status !== "analyzed" && t.status !== "synced" && t.status !== "draft") return false;
+    if (sidebarFilter === "error" && t.status !== "error") return false;
 
-  if (tasks.length === 0) {
-    return (
-      <div className="flex-1 flex flex-col items-center justify-center p-6 bg-[#F4F8FB] h-full" 
-           onDragOver={e => e.preventDefault()} 
-           onDrop={e => { e.preventDefault(); handleMultipleFiles(e.dataTransfer.files); }}>
-        <input type="file" multiple accept=".pdf,image/*" className="hidden" ref={fileInputRef} onChange={e => { if (e.target.files) handleMultipleFiles(e.target.files); }} />
-        <div onClick={() => fileInputRef.current?.click()} className="w-full max-w-2xl bg-white border border-[#D1D5DB] transition-all cursor-pointer rounded-[8px] flex flex-col items-center justify-center group shadow-[0_4px_20px_rgba(0,0,0,0.03)] p-12">
-           <div className="w-20 h-20 rounded-full bg-[#1677FF]/5 flex items-center justify-center group-hover:bg-[#1677FF]/10 transition-colors mb-6 border border-[#1677FF]/10">
-              <Upload size={32} className="text-[#1677FF]/60 group-hover:text-[#1677FF] transition-all" />
-           </div>
-           <h3 className="text-xl font-bold text-sap-gray-900 mb-2">批量文档识别站</h3>
-           <p className="text-sm text-gray-400 font-medium mb-12">点击或拖拽上传多个文档 / 图片</p>
-           
-           <div className="w-full border-t border-gray-100 pt-8 grid grid-cols-2 gap-8 text-center">
-              <div className="space-y-1">
-                <div className="text-[11px] font-bold text-gray-300 uppercase tracking-widest">支持类型</div>
-                <div className="text-xs font-bold text-gray-500">PDF / JPG / PNG</div>
-              </div>
-              <div className="space-y-1">
-                <div className="text-[11px] font-bold text-gray-300 uppercase tracking-widest">处理模式</div>
-                <div className="text-xs font-bold text-gray-500">高精度并行解析</div>
-              </div>
-           </div>
-        </div>
-      </div>
-    );
-  }
+    // 2. Search query
+    if (sidebarSearch.trim() !== "") {
+      const searchLower = sidebarSearch.toLowerCase();
+      const contractMatch = t.contractNumber?.toLowerCase().includes(searchLower);
+      const customerMatch = t.customerName?.toLowerCase().includes(searchLower);
+      return contractMatch || customerMatch;
+    }
+
+    return true;
+  });
 
   return (
-    <div className="flex-1 flex flex-col w-full h-full bg-[#F4F8FB] overflow-hidden relative">
+    <div className="flex-1 flex flex-col md:flex-row w-full h-full bg-[#F4F8FB] overflow-hidden relative">
       <style dangerouslySetInnerHTML={{ __html: `
         .compact-table tr { height: 36px !important; }
         .compact-table td, .compact-table th { font-size: 11px; padding: 0 10px !important; }
@@ -661,8 +772,8 @@ export function SalesOrderModule({
         
         /* Optimized Scrollbar */
         .custom-scrollbar::-webkit-scrollbar {
-          width: 10px;
-          height: 10px;
+          width: 8px;
+          height: 8px;
         }
         .custom-scrollbar::-webkit-scrollbar-track {
           background: #f1f5f9;
@@ -678,102 +789,604 @@ export function SalesOrderModule({
         }
       `}} />
 
-      {/* Global Toolbar */}
-      <div className="h-[52px] bg-white border-b border-[#E2E8F0] px-4 flex items-center justify-between shrink-0 z-30 shadow-sm">
-         <div className="flex items-center gap-3">
-            <input type="file" multiple id="add-more" className="hidden" onChange={e => e.target.files && handleMultipleFiles(e.target.files)} />
-            <label htmlFor="add-more" className="flex items-center gap-2 px-4 h-[32px] bg-white border border-[#D1D5DB] rounded-[2px] cursor-pointer hover:bg-gray-50 text-xs font-bold text-sap-gray-900 transition-all">
-               <Plus size={14}/> 批量上传
-            </label>
+      {/* ==================== 1. LEFT SIDEBAR (QUEUE & HISTORY LIST) ==================== */}
+      <div className={cn(
+         "shrink-0 border-[#DCDFE6] bg-white flex flex-col h-full z-20 shadow-sm transition-all duration-300 relative",
+         isSidebarCollapsed 
+            ? "w-0 md:w-0 border-r-0 overflow-hidden" 
+            : "w-full md:w-[280px] border-r"
+      )}>
+         <div className="p-4 border-b border-[#E2E8F0] space-y-3 shrink-0">
+            <h3 className="text-xs font-black text-sap-gray-900 tracking-wider flex items-center justify-between uppercase">
+               <span className="flex items-center gap-1.5 font-sans">
+                  <span className="w-1 h-3 bg-[#1677FF]" />
+                  智能录单列表
+               </span>
+               <div className="flex items-center gap-2">
+                  <span className="text-[10px] px-1.5 py-0.5 bg-gray-100 text-[#1677FF] border border-[#1677FF]/10 rounded font-bold font-mono">
+                     {tasks.length} 份
+                  </span>
+                  <button 
+                     onClick={() => setIsSidebarCollapsed(true)}
+                     className="p-1 hover:bg-gray-100 rounded text-gray-400 hover:text-gray-700 transition-colors cursor-pointer"
+                     title="收起智能录单列表"
+                  >
+                     <ChevronLeft size={13} />
+                  </button>
+               </div>
+            </h3>
+            <input type="file" id="sidebar-upload" multiple accept=".pdf,image/*" className="hidden" onChange={e => { if (e.target.files) handleMultipleFiles(e.target.files); }} />
+            <button 
+              onClick={() => {
+                setActiveTaskId(null); // Deselect current so dropzone is shown
+                setTimeout(() => {
+                   document.getElementById("sidebar-upload")?.click();
+                }, 50);
+              }} 
+              className="w-full flex items-center justify-center gap-2 px-4 h-[34px] bg-[#1677FF] hover:bg-[#0050B3] text-white rounded-[2px] text-xs font-bold transition-all shadow-[0_2px_4px_rgba(22,119,255,0.1)] outline-none"
+            >
+               <Plus size={14}/> 上传订单文件
+            </button>
+
+            {/* 批量控制大盘 Toggle */}
+            {tasks.length > 0 && (
+               <button 
+                  onClick={() => setActiveTaskId(null)}
+                  className={cn(
+                     "w-full flex items-center justify-between px-3 h-[34px] border rounded-[2px] text-xs font-bold transition-all outline-none",
+                     activeTaskId === null 
+                        ? "bg-[#1677FF] border-[#1677FF] text-white shadow-[0_2px_4px_rgba(22,119,255,0.15)]" 
+                        : "bg-white border-gray-200 text-gray-700 hover:border-[#1677FF] hover:text-[#1677FF]"
+                  )}
+               >
+                  <span className="flex items-center gap-1.5 font-sans">
+                     <Cpu size={13} className={activeTaskId === null ? "text-white" : "text-[#1677FF]"} />
+                     进入批量大盘控制台
+                  </span>
+                  <span className={cn(
+                     "text-[10px] px-1.5 py-0.5 rounded font-mono font-bold",
+                     activeTaskId === null ? "bg-white/20 text-white" : "bg-gray-100 text-[#1677FF]"
+                  )}>
+                     {tasks.length}
+                  </span>
+               </button>
+            )}
+
+            {/* Classy Search Block */}
+            {tasks.length > 0 && (
+               <div className="relative">
+                  <Search size={11} className="absolute left-2.5 top-2.5 text-gray-400" />
+                  <input
+                     type="text"
+                     value={sidebarSearch}
+                     onChange={e => setSidebarSearch(e.target.value)}
+                     placeholder="搜索合同号/客户名称..."
+                     className="w-full h-8 pl-7.5 pr-6 text-[10px] bg-gray-50 border border-gray-200 focus:border-[#1677FF] focus:bg-white rounded-[2px] transition-all outline-none"
+                  />
+                  {sidebarSearch && (
+                     <button 
+                        onClick={() => setSidebarSearch("")}
+                        className="absolute right-2 top-2 p-0.5 text-gray-400 hover:text-gray-600 outline-none"
+                     >
+                        <X size={10} />
+                     </button>
+                  )}
+               </div>
+            )}
+
+            {/* Category Pills */}
+            {tasks.length > 0 && (
+               <div className="flex bg-gray-100 p-0.5 rounded-[2px] gap-0.5 text-[10px] font-bold">
+                  <button 
+                     onClick={() => setSidebarFilter("all")}
+                     className={cn("flex-1 py-1 rounded-[2px] transition-colors text-center text-xs", sidebarFilter === "all" ? "bg-white text-[#1677FF] shadow-xs" : "text-gray-500 hover:text-gray-900")}
+                  >
+                     全部
+                  </button>
+                  <button 
+                     onClick={() => setSidebarFilter("processing")}
+                     className={cn("flex-1 py-1 rounded-[2px] transition-colors text-center text-xs", sidebarFilter === "processing" ? "bg-white text-[#1677FF] shadow-xs" : "text-gray-500 hover:text-gray-900")}
+                  >
+                     解析中
+                  </button>
+                  <button 
+                     onClick={() => setSidebarFilter("done")}
+                     className={cn("flex-1 py-1 rounded-[2px] transition-colors text-center text-xs", sidebarFilter === "done" ? "bg-white text-[#1677FF] shadow-xs" : "text-gray-500 hover:text-gray-900")}
+                  >
+                     草稿/同步
+                  </button>
+                  <button 
+                     onClick={() => setSidebarFilter("error")}
+                     className={cn("flex-1 py-1 rounded-[2px] transition-colors text-center text-xs", sidebarFilter === "error" ? "bg-white text-[#1677FF] shadow-xs" : "text-gray-500 hover:text-gray-900")}
+                  >
+                     异常
+                  </button>
+               </div>
+            )}
          </div>
-         <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => handleBatchAction("draft")} isLoading={isSaving} className="h-[32px] font-bold text-xs px-4 rounded-[2px] border-gray-300 text-gray-600">
-               <Save size={14} className="mr-2"/> 批量保存草稿
-            </Button>
-            <Button variant="primary" size="sm" onClick={() => handleBatchAction("synced")} isLoading={isSaving} className="h-[32px] font-bold text-xs px-5 rounded-[2px] bg-[#1677FF] hover:bg-[#0050B3]">
-               <Send size={14} className="mr-2"/> 生成订单并推送 SAP
-            </Button>
+
+         {/* Document List */}
+         <div className="flex-1 overflow-y-auto p-3 space-y-2 bg-[#F8F9FA] custom-scrollbar">
+            {tasks.length === 0 ? (
+               <div className="h-full flex flex-col items-center justify-center text-center p-4">
+                  <div className="w-12 h-12 rounded-full border border-dashed border-gray-300 flex items-center justify-center text-gray-300 mb-2">
+                     <FileText size={18} />
+                  </div>
+                  <p className="text-xs font-bold text-gray-400">暂无上传中的单据</p>
+                  <p className="text-[10px] text-gray-300 mt-1 font-medium">上传后系统将开始自动识别提取</p>
+               </div>
+            ) : filteredTasks.length === 0 ? (
+               <div className="py-12 flex flex-col items-center justify-center text-center px-4">
+                  <div className="text-gray-300 mb-2">
+                     <FileSearch size={22} className="stroke-1" />
+                  </div>
+                  <p className="text-xs font-bold text-gray-400">无符合过滤条件的单据</p>
+                  <button 
+                     onClick={() => { setSidebarFilter("all"); setSidebarSearch(""); }} 
+                     className="text-[10px] text-[#1677FF] font-bold mt-2 hover:underline inline-flex items-center gap-0.5"
+                  >
+                     重置筛选
+                  </button>
+               </div>
+            ) : (
+               filteredTasks.map(t => {
+                  const active = t.id === activeTaskId;
+                  const isErr = t.status === "error";
+                  const isProcessing = t.status === "processing";
+                  const isAnalyzed = t.status === "analyzed" || t.status === "synced" || t.status === "draft";
+                  const isPending = t.status === "pending";
+
+                  let cardStyle = "";
+                  if (active) {
+                     cardStyle = isErr 
+                        ? "bg-[#FFF1F0] border-[#FF4D4F] ring-1 ring-[#FF4D4F]/30"
+                        : isAnalyzed 
+                           ? "bg-[#F6FFED] border-[#52C41A] ring-1 ring-[#52C41A]/30"
+                           : isProcessing
+                              ? "bg-[#FFF7E6] border-[#FFA940] ring-1 ring-[#FFA940]/30"
+                              : "bg-white border-[#1677FF] ring-1 ring-[#1677FF]/30";
+                  } else {
+                     cardStyle = isErr 
+                        ? "bg-white border-[#FFEBEB] hover:border-[#FF4D4F]/40" 
+                        : isAnalyzed 
+                           ? "bg-white border-[#E6F7E6] hover:border-[#52C41A]/40" 
+                           : isProcessing
+                              ? "bg-white border-[#FFF0D6] hover:border-[#FFA940]/40"
+                              : "bg-white border-[#E2E8F0] hover:border-[#1677FF]";
+                  }
+
+                  return (
+                     <div 
+                        key={t.id} 
+                        onClick={() => setActiveTaskId(t.id)} 
+                        className={cn("group relative p-3 border rounded-[2px] cursor-pointer transition-all duration-150 flex flex-col gap-1.5 shadow-sm", cardStyle)}
+                     >
+                        {/* Delete task button */}
+                        <button 
+                           onClick={e => handleDeleteTask(e, t.id)} 
+                           className="absolute top-2 right-2 p-1 rounded hover:bg-black/5 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                           <X size={12}/>
+                        </button>
+
+                        <div className="flex items-start gap-2 pr-4">
+                           <div className={cn("mt-0.5 p-1 rounded", 
+                              isErr ? "bg-red-50 text-[#FF4D4F]" : isAnalyzed ? "bg-green-50 text-[#52C41A]" : "bg-blue-50 text-[#1677FF]"
+                           )}>
+                              <FileText size={13}/>
+                           </div>
+                           <div className="flex-1 min-w-0">
+                              <p className={cn("text-[11px] font-bold truncate leading-tight", 
+                                 isErr ? "text-[#CF1322]" : isAnalyzed ? "text-[#135200]" : "text-gray-800"
+                              )}>
+                                 {isErr ? (t.isDuplicate ? "同单重复" : "解析失败") : (t.contractNumber && t.contractNumber !== "等待识别..." ? t.contractNumber : (isProcessing ? "解析中..." : "待处理..."))}
+                              </p>
+                              <p className="text-[10px] text-gray-400 truncate mt-0.5 font-medium">{t.customerName || "读取单据属性中..."}</p>
+                           </div>
+                        </div>
+
+                        <div className="flex items-center justify-between border-t border-gray-100/60 pt-2 mt-0.5">
+                           {/* Status badge */}
+                           {isProcessing ? (
+                              <span className="text-[9px] font-bold text-[#D46B08] bg-[#FFF7E6] px-1.5 py-0.5 rounded flex items-center gap-1">
+                                 <RefreshCcw size={8} className="animate-spin" /> 智能解析中
+                              </span>
+                           ) : isErr ? (
+                              <span className="text-[9px] font-bold text-[#CF1322] bg-[#FFF1F0] px-1.5 py-0.5 rounded">
+                                 {t.isDuplicate ? "同单重复" : "解析异常"}
+                              </span>
+                           ) : t.status === "synced" ? (
+                              <span className="text-[9px] font-bold text-white bg-[#52C41A] px-1.5 py-0.5 rounded">
+                                 已推送 SAP
+                              </span>
+                           ) : t.status === "draft" ? (
+                              <span className="text-[9px] font-bold text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">
+                                 已保存草稿
+                              </span>
+                           ) : (
+                              <span className="text-[9px] font-bold text-[#135200] bg-[#F6FFED] px-1.5 py-0.5 rounded">
+                                 置信度 {t.confidence?.toFixed(0)}%
+                              </span>
+                           )}
+
+                           <span className="text-[9px] text-gray-400 font-mono scale-90">{t.sourceType || "智能单据"}</span>
+                        </div>
+                     </div>
+                  );
+               })
+            )}
          </div>
+
+         {tasks.length > 0 && (
+            <div className="p-3 border-t border-[#E2E8F0] bg-gray-50/50 shrink-0">
+               <button 
+                  onClick={() => {
+                     if (confirm("是否清空所有已上传过的解析记录？此操作不可逆。")) {
+                        tasks.forEach(t => globalFileCache.delete(t.id));
+                        setTasks([]);
+                        setActiveTaskId(null);
+                        localStorage.removeItem("persistent_upload_tasks");
+                     }
+                  }} 
+                  className="w-full h-8 flex items-center justify-center gap-1.5 text-[11px] font-bold text-gray-500 hover:text-red-500 border border-gray-200 bg-white hover:bg-red-50 hover:border-red-100 rounded transition-all"
+               >
+                  <Trash2 size={12}/> 清空解析列表
+               </button>
+            </div>
+         )}
       </div>
 
-      {/* Processing Status Bar (Image 2 style) */}
-      {tasks.some(t => t.status === "processing") && (
-        <div className="h-[32px] bg-[#1677FF] px-4 flex items-center justify-between shrink-0 overflow-hidden">
-          <div className="flex items-center gap-3">
-            <div className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
-            <span className="text-[11px] font-bold text-white tracking-wide">
-              正在处理中 {tasks.filter(t => t.status === "analyzed" || t.status === "synced" || t.status === "draft").length} / {tasks.length} ...
-            </span>
-          </div>
-          <div className="text-[10px] font-bold text-[#1677FF]/20 font-mono">神经网络 OCR 流水线就绪</div>
-        </div>
-      )}
+      {/* ==================== 2. WORKSPACE / DETAIL AREA ==================== */}
+      <div className="flex-1 flex flex-col h-full overflow-hidden">
+         {/* Global Toolbar */}
+         <div className="h-[52px] bg-white border-b border-[#E2E8F0] px-4 flex items-center justify-between shrink-0 z-30 shadow-sm">
+            <div className="flex items-center gap-2">
+               {isSidebarCollapsed && (
+                  <button 
+                     onClick={() => setIsSidebarCollapsed(false)}
+                     className="mr-2 flex items-center gap-1.5 px-3 h-[32px] border border-gray-200 hover:border-[#1677FF] hover:text-[#1677FF] hover:bg-[#1677FF]/5 rounded-[2px] transition-all text-xs font-bold text-gray-700 bg-white shadow-xs cursor-pointer select-none"
+                     title="展开智能录单列表"
+                  >
+                     <ChevronRight size={13} className="animate-pulse" />
+                     <span>展开列表</span>
+                  </button>
+               )}
+               <div className="flex items-center gap-1.5 text-xs font-bold text-sap-gray-900 font-mono">
+                  <span className="w-2 h-2 rounded-full bg-[#1677FF] animate-pulse" />
+                  智能单据解析处理站
+               </div>
+            </div>
+            {tasks.length > 0 && (
+               <div className="flex items-center gap-2">
+                  <Button variant="outline" size="sm" onClick={() => handleBatchAction("draft")} isLoading={isSaving} className="h-[32px] font-bold text-xs px-4 rounded-[2px] border-gray-300 text-gray-600">
+                     <Save size={14} className="mr-2"/> 批量保存草稿
+                  </Button>
+                  <Button variant="primary" size="sm" onClick={() => handleBatchAction("synced")} isLoading={isSaving} className="h-[32px] font-bold text-xs px-5 rounded-[2px] bg-[#1677FF] hover:bg-[#0050B3]">
+                     <Send size={14} className="mr-2"/> 生成订单并推送 SAP
+                  </Button>
+               </div>
+            )}
+         </div>
 
-      {/* 任务页签系统 - 高级状态焦点重构 */}
-      <div className="h-[56px] bg-[#F0F2F5] border-b border-[#D8DEE6] px-4 flex items-center gap-2 overflow-x-auto shrink-0 custom-scrollbar">
-         {tasks.map(t => {
-           const active = t.id === activeTaskId;
-           const isErr = t.status === "error";
-           const isProcessing = t.status === "processing";
-           const isAnalyzed = t.status === "analyzed" || t.status === "synced" || t.status === "draft";
-           const isPending = t.status === "pending";
-           
-           // 焦点视觉逻辑重构
-           let tabStyle = "";
-           if (active) {
-             if (isPending || isProcessing) {
-               // 待解析/解析中被选中：全蓝覆盖
-               tabStyle = "bg-[#1677FF] border-[#1677FF] shadow-[0_0_10px_rgba(22,119,255,0.3)] z-10 scale-[1.02]";
-             } else {
-               // 解析成功/失败被选中：保留状态色 + 蓝色光晕外发光
-               tabStyle = cn(
-                 isErr ? "bg-[#FFF1F0] border-[#FF4D4F]" : "bg-[#F6FFED] border-[#52C41A]",
-                 "shadow-[0_0_0_2px_rgba(22,119,255,0.5)] z-10 scale-[1.02]"
-               );
-             }
-           } else {
-             // 非选中状态
-             tabStyle = isErr 
-               ? "bg-[#FFF1F0] border-[#FF4D4F]" 
-               : isAnalyzed 
-                 ? "bg-[#F6FFED] border-[#52C41A]" 
-                 : isProcessing
-                   ? "bg-[#FFF7E6] border-[#FFA940]"
-                   : "bg-white border-[#DCDFE6] hover:border-[#1677FF]";
-           }
-
-           return (
-             <div key={t.id} onClick={() => setActiveTaskId(t.id)} 
-                  className={cn("group relative w-[170px] h-[42px] shrink-0 flex flex-col justify-center px-3 border rounded-[2px] cursor-pointer transition-all duration-200", tabStyle)}>
-               
-               <button onClick={e => handleDeleteTask(e, t.id)} 
-                       className={cn("absolute top-0.5 right-0.5 p-0.5 rounded transition-opacity", 
-                       (active && (isPending || isProcessing)) ? "text-white/60 hover:text-white" : "text-gray-400 opacity-0 group-hover:opacity-100 hover:bg-gray-100")}>
-                  <X size={10}/>
-               </button>
-
-               <div className="flex items-center gap-1.5 leading-none mb-0.5">
-                  {!(active && (isPending || isProcessing)) && (
-                    <div className={cn("w-1.5 h-1.5 rounded-full shrink-0", 
-                      isErr ? "bg-[#FF4D4F]" : isAnalyzed ? "bg-[#52C41A]" : isProcessing ? "bg-[#FFA940]" : "bg-gray-300"
-                    )} />
-                  )}
-                  <span className={cn("text-[11px] font-bold truncate tracking-tight", 
-                     (active && (isPending || isProcessing)) ? "text-white" : (isErr ? "text-[#CF1322]" : isAnalyzed ? "text-[#135200]" : isProcessing ? "text-[#D46B08]" : "text-gray-600"))}>
-                     {isErr ? (t.isDuplicate ? "同单重复" : "解析失败") : (t.contractNumber && t.contractNumber !== "等待识别..." ? t.contractNumber : (isProcessing ? "解析中..." : "文档比对中..."))}
+         {/* Processing Status Bar */}
+         {tasks.some(t => t.status === "processing") && (
+            <div className="h-[32px] bg-[#1677FF] px-4 flex items-center justify-between shrink-0 overflow-hidden">
+               <div className="flex items-center gap-3">
+                  <div className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                  <span className="text-[11px] font-bold text-white tracking-wide">
+                     正在处理中 {tasks.filter(t => t.status === "analyzed" || t.status === "synced" || t.status === "draft").length} / {tasks.length} ...
                   </span>
                </div>
-               <div className={cn("text-[9px] truncate font-medium", 
-                  (active && (isPending || isProcessing)) ? "text-white/80" : (isErr ? "text-[#FF4D4F]/80" : isAnalyzed ? "text-[#135200]/70" : "text-gray-400"))}>
-                  {t.customerName || "等待获取客户主体..."}
-               </div>
-             </div>
-           );
-         })}
-      </div>
+               <div className="text-[10px] font-bold text-white/30 font-mono">神经网络 OCR 流水线就绪</div>
+            </div>
+         )}
 
-      {/* Workspace - Improved Responsive Grid */}
-      <div className="flex-1 flex flex-col lg:flex-row w-full relative overflow-hidden bg-[#F4F8FB]">
+         {/* If active task is null or not found, show the big upload Dropzone */}
+         {!activeTask ? (
+            tasks.length === 0 ? (
+               <div 
+                  className="flex-1 flex flex-col items-center justify-center p-6 bg-[#F4F8FB] h-full" 
+                  onDragOver={e => e.preventDefault()} 
+                  onDrop={e => { e.preventDefault(); handleMultipleFiles(e.dataTransfer.files); }}
+               >
+                  <input type="file" multiple accept=".pdf,image/*" className="hidden" ref={fileInputRef} onChange={e => { if (e.target.files) handleMultipleFiles(e.target.files); }} />
+                  <div onClick={() => fileInputRef.current?.click()} className="w-full max-w-2xl bg-white border border-[#D1D5DB] transition-all cursor-pointer rounded-[4px] flex flex-col items-center justify-center group shadow-[0_4px_20px_rgba(0,0,0,0.03)] p-12">
+                     <div className="w-16 h-16 rounded-full bg-[#1677FF]/5 flex items-center justify-center group-hover:bg-[#1677FF]/10 transition-colors mb-6 border border-[#1677FF]/10">
+                        <Upload size={28} className="text-[#1677FF]/60 group-hover:text-[#1677FF] transition-all" />
+                     </div>
+                     <h3 className="text-xl font-bold text-sap-gray-900 mb-2 font-sans">批量文档解析站</h3>
+                     <p className="text-xs text-gray-400 font-bold mb-12">点击或拖拽上传多个 PDF 合同单据 / 图片数据</p>
+                     
+                     <div className="w-full border-t border-gray-100 pt-8 grid grid-cols-2 gap-8 text-center bg-gray-50/40 p-4 rounded">
+                        <div className="space-y-1">
+                           <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest font-mono">支持类型</div>
+                           <div className="text-xs font-bold text-gray-600">PDF / JPG / PNG</div>
+                        </div>
+                        <div className="space-y-1">
+                           <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest font-mono">处理模式</div>
+                           <div className="text-xs font-bold text-gray-600">2.0x 神经网络并行渲染</div>
+                        </div>
+                     </div>
+                  </div>
+               </div>
+            ) : (
+               <div className="flex-1 flex flex-col p-6 overflow-y-auto bg-[#F4F8FB] space-y-6 custom-scrollbar">
+                  {/* Dashboard Header */}
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                     <div>
+                        <h2 className="text-base font-black text-sap-gray-900 flex items-center gap-2 font-sans">
+                           <Cpu size={18} className="text-[#1677FF]" />
+                           智能录单批处理大盘控制台
+                        </h2>
+                        <p className="text-xs text-gray-500 mt-1">
+                           在此直观监控所有订单合同置信度、AI 提取状态，支持跨单据极速筛选与集中核对。
+                        </p>
+                     </div>
+                     <div className="flex items-center gap-2 shrink-0">
+                        <input type="file" multiple id="dashboard-upload" className="hidden" onChange={e => { if (e.target.files) handleMultipleFiles(e.target.files); }} />
+                        <button 
+                           onClick={() => document.getElementById("dashboard-upload")?.click()}
+                           className="flex items-center gap-1.5 px-3 py-1.5 border border-[#1677FF]/20 bg-[#1677FF]/5 hover:bg-[#1677FF]/10 text-xs text-[#1677FF] font-bold rounded-[2px] transition-all outline-none"
+                        >
+                           <Plus size={13} />
+                           解析新单据
+                        </button>
+                      </div>
+                  </div>
+
+                  {/* KPI Highlights */}
+                  <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+                     {[
+                        {
+                           label: "全部单据",
+                           count: tasks.length,
+                           desc: "队列中所有文档",
+                           type: "all",
+                           activeBg: "bg-white border-[#1677FF] ring-2 ring-[#1677FF]/10",
+                           normalBg: "bg-white border-gray-200 hover:border-gray-300",
+                           colorClass: "text-[#1677FF]"
+                        },
+                        {
+                           label: "在途解析中",
+                           count: tasks.filter(t => t.status === "processing" || t.status === "pending").length,
+                           desc: "神经网络自动提取",
+                           type: "processing",
+                           activeBg: "bg-[#FFF7E6] border-[#FFA940] ring-2 ring-[#FFA940]/10",
+                           normalBg: "bg-white border-gray-200 hover:border-[#FFA940]/40",
+                           colorClass: "text-amber-500"
+                        },
+                        {
+                           label: "自动推送就绪",
+                           count: tasks.filter(t => t.status === "analyzed" && (t.confidence || 0) >= 95).length,
+                           desc: "高置信度免审",
+                           type: "done",
+                           activeBg: "bg-[#F6FFED] border-[#52C41A] ring-2 ring-[#52C41A]/10",
+                           normalBg: "bg-white border-gray-200 hover:border-[#52C41A]/40",
+                           colorClass: "text-[#52C41A]"
+                        },
+                        {
+                           label: "已暂存/同步",
+                           count: tasks.filter(t => t.status === "synced" || t.status === "draft").length,
+                           desc: "ERP 已确认记账",
+                           type: "done",
+                           activeBg: "bg-[#F0F2F5] border-gray-400 ring-2 ring-gray-200",
+                           normalBg: "bg-white border-gray-200 hover:border-gray-400",
+                           colorClass: "text-gray-700"
+                        },
+                        {
+                           label: "异常 / 需复核",
+                           count: tasks.filter(t => t.status === "error" || (t.status === "analyzed" && (t.confidence || 0) < 95)).length,
+                           desc: "不满足直接推送标准",
+                           type: "error",
+                           activeBg: "bg-[#FFF1F0] border-[#FF4D4F] ring-2 ring-[#FF4D4F]/10",
+                           normalBg: "bg-white border-gray-200 hover:border-[#FF4D4F]/40",
+                           colorClass: "text-[#FF4D4F]"
+                        }
+                     ].map((card, idx) => {
+                        const isMatch = sidebarFilter === card.type || (card.type === "all" && sidebarFilter === "all");
+                        return (
+                           <div 
+                              key={idx} 
+                              onClick={() => setSidebarFilter(card.type as any)}
+                              className={cn(
+                                 "p-3 rounded-[3px] border cursor-pointer transition-all duration-200 flex flex-col justify-between h-[82px] shadow-xs select-none",
+                                 isMatch ? card.activeBg : card.normalBg
+                              )}
+                           >
+                              <div className="flex justify-between items-start">
+                                 <span className="text-[11px] font-bold text-gray-500">{card.label}</span>
+                                 <span className={cn("text-lg font-black font-mono leading-none", card.colorClass)}>{card.count}</span>
+                              </div>
+                              <span className="text-[9px] text-[#8C8C8C] truncate mt-1 font-medium">{card.desc}</span>
+                           </div>
+                        );
+                     })}
+                  </div>
+
+                  {/* Compact Quick Operations Bar */}
+                  <div className="bg-white border border-[#E2E8F0] p-3 rounded-[2px] flex flex-col md:flex-row items-center justify-between gap-3 shadow-xs">
+                     <div className="flex items-center gap-2">
+                        <span className="text-xs text-gray-500 font-bold">批处理快速操作:</span>
+                        <div className="flex items-center gap-1.5">
+                           <Button variant="outline" size="sm" onClick={() => handleBatchAction("draft")} isLoading={isSaving} className="h-[28px] font-bold text-[10px] px-2 rounded-[2px] border-gray-200 text-gray-600">
+                              <Save size={11} className="mr-1"/> 批量存为草稿
+                           </Button>
+                           <Button variant="primary" size="sm" onClick={() => handleBatchAction("synced")} isLoading={isSaving} className="h-[28px] font-bold text-[10px] px-3 rounded-[2px] bg-[#1677FF] hover:bg-[#0050B3]">
+                              <Send size={11} className="mr-1"/> 批量推送 SAP
+                           </Button>
+                        </div>
+                     </div>
+                     <span className="text-[10px] text-gray-400 font-medium font-sans">✨ 批量操作将智能跳过置信度低于 95% 或存在解析状态异常的订单，防差错联锁兜底</span>
+                  </div>
+
+                  {/* Bulk Data Grid */}
+                  <div className="bg-white border border-[#E8EAED] rounded-[2px] shadow-sm overflow-hidden flex flex-col">
+                     <div className="px-4 py-3 border-b border-[#E8EAED] flex items-center justify-between bg-gray-50/50">
+                        <div className="flex items-center gap-2 text-xs font-black text-sap-gray-950 font-sans">
+                           <FileText size={14} className="text-gray-500" />
+                           批处理单据明细表 ({filteredTasks.length} 项)
+                        </div>
+                        {sidebarSearch && (
+                           <span className="text-[10px] text-[#1677FF] bg-[#1677FF]/5 px-2 py-0.5 rounded font-bold">
+                              搜索结果: "{sidebarSearch}"
+                           </span>
+                        )}
+                     </div>
+
+                     <div className="overflow-x-auto border-b border-[#E8EAED]">
+                        <table className="w-full text-left border-collapse">
+                           <thead>
+                              <tr className="bg-[#FAF9F9] border-b border-[#E8EAED] text-[11px] font-bold text-gray-500 uppercase tracking-wider">
+                                 <th className="py-2.5 px-4 font-mono w-[60px]">序号</th>
+                                 <th className="py-2.5 px-3">对应合同号 / 主键 ID</th>
+                                 <th className="py-2.5 px-4">客户主体/购买实体</th>
+                                 <th className="py-2.5 px-3 text-center w-[120px]">来源格式</th>
+                                 <th className="py-2.5 px-3 w-[120px]">置信评分</th>
+                                 <th className="py-2.5 px-3 w-[140px]">同步状态</th>
+                                 <th className="py-2.5 px-4 text-right w-[180px]">控制快捷键</th>
+                              </tr>
+                           </thead>
+                           <tbody className="divide-y divide-gray-100 text-[11px]">
+                              {filteredTasks.length === 0 ? (
+                                 <tr>
+                                    <td colSpan={7} className="py-12 text-center text-gray-400 font-semibold">
+                                       没有符合当前筛选或搜索条件的单据
+                                    </td>
+                                 </tr>
+                              ) : (
+                                 filteredTasks.map((t, idx) => {
+                                    const isProcessing = t.status === "processing" || t.status === "pending";
+                                    const isErr = t.status === "error";
+                                    const isOK = t.status === "analyzed" && (t.confidence || 0) >= 95;
+                                    const isWarning = t.status === "analyzed" && (t.confidence || 0) < 95;
+                                    
+                                    return (
+                                       <tr 
+                                          key={t.id} 
+                                          className="hover:bg-gray-50/70 transition-colors group cursor-pointer"
+                                          onClick={() => setActiveTaskId(t.id)}
+                                       >
+                                          <td className="py-3 px-4 font-mono font-bold text-gray-400">{idx + 1}</td>
+                                          <td className="py-3 px-3">
+                                             <div className="flex items-center gap-2">
+                                                <FileText size={12} className="text-gray-400 group-hover:text-[#1677FF] transition-colors" />
+                                                <span className="font-bold text-gray-800">
+                                                   {t.contractNumber && t.contractNumber !== "等待识别..." ? t.contractNumber : (isProcessing ? "自动提取中..." : "待处理")}
+                                                </span>
+                                             </div>
+                                          </td>
+                                          <td className="py-3 px-4 text-gray-500 font-semibold max-w-[220px] truncate animate-fade-in">
+                                             {t.customerName || "获取属性中..."}
+                                          </td>
+                                          <td className="py-3 px-3 text-center">
+                                             <span className={cn(
+                                                "inline-block px-1.5 py-0.5 rounded text-[10px] font-bold font-mono",
+                                                t.sourceType === "PDF 文档" ? "bg-red-50 text-red-600 border border-red-100" : "bg-orange-50 text-[#D46B08] border border-orange-100"
+                                             )}>
+                                                {t.sourceType || "流媒体"}
+                                             </span>
+                                          </td>
+                                          <td className="py-3 px-3">
+                                             {isProcessing ? (
+                                                <div className="w-16 h-1 bg-gray-100 rounded-full overflow-hidden">
+                                                   <div className="h-full bg-blue-500 animate-pulse w-2/3" />
+                                                 </div>
+                                             ) : t.confidence !== undefined ? (
+                                                <div className="flex items-center gap-2">
+                                                   <span className={cn(
+                                                      "font-black font-mono text-[10px]",
+                                                      t.confidence >= 95 ? "text-[#52C41A]" : t.confidence >= 90 ? "text-orange-500" : "text-[#FF4D4F]"
+                                                   )}>
+                                                      {t.confidence.toFixed(0)}%
+                                                   </span>
+                                                   <div className="w-12 h-1 bg-gray-100 rounded-full overflow-hidden hidden sm:block">
+                                                      <div 
+                                                         style={{ width: `${t.confidence}%` }} 
+                                                         className={cn(
+                                                            "h-full rounded-full",
+                                                            t.confidence >= 95 ? "bg-[#52C41A]" : t.confidence >= 90 ? "bg-orange-500" : "bg-[#FF4D4F]"
+                                                         )}
+                                                      />
+                                                   </div>
+                                                </div>
+                                             ) : (
+                                                <span className="text-gray-400 font-semibold">-</span>
+                                             )}
+                                          </td>
+                                          <td className="py-3 px-3">
+                                             {isProcessing ? (
+                                                <span className="inline-flex items-center gap-1 text-[#D46B08] font-bold bg-[#FFF7E6] px-1.5 py-0.5 rounded animate-pulse">
+                                                   <RefreshCcw size={10} className="animate-spin" /> AI 分析中
+                                                </span>
+                                             ) : isErr ? (
+                                                <span className="text-[#CF1322] font-semibold bg-[#FFF1F0] px-1.5 py-0.5 rounded">
+                                                   解析异常
+                                                </span>
+                                             ) : t.status === "synced" ? (
+                                                <span className="text-white font-semibold bg-[#52C41A] px-1.5 py-0.5 rounded">
+                                                   已同步 SAP
+                                                </span>
+                                             ) : t.status === "draft" ? (
+                                                <span className="text-gray-600 font-semibold bg-gray-100 px-1.5 py-0.5 rounded">
+                                                   已存草稿
+                                                </span>
+                                             ) : isOK ? (
+                                                <span className="text-[#135200] font-semibold bg-[#F6FFED] px-1.5 py-0.5 rounded border border-[#B7EB8F]">
+                                                   直接同步就绪
+                                                 </span>
+                                             ) : (
+                                                <span className="text-orange-600 font-semibold bg-orange-50 px-1.5 py-0.5 rounded border border-orange-200">
+                                                   需复核纠错
+                                                </span>
+                                             )}
+                                          </td>
+                                          <td className="py-3 px-4 text-right" onClick={e => e.stopPropagation()}>
+                                             <div className="flex items-center justify-end gap-1.5">
+                                                <button 
+                                                   onClick={() => setActiveTaskId(t.id)}
+                                                   className="px-2.5 py-1 bg-[#1677FF]/5 hover:bg-[#1677FF]/10 text-xs text-[#1677FF] font-bold rounded transition-all outline-none"
+                                                >
+                                                   核验
+                                                </button>
+                                                {isErr && (
+                                                   <button 
+                                                      onClick={() => processSingleTask(t)}
+                                                      className="px-2.5 py-1 bg-red-50 hover:bg-red-100 text-xs text-red-600 font-bold rounded transition-all outline-none"
+                                                   >
+                                                      重试
+                                                   </button>
+                                                )}
+                                                <button 
+                                                   onClick={e => handleDeleteTask(e, t.id)}
+                                                   className="p-1 rounded text-gray-400 hover:text-red-500 hover:bg-gray-100 transition-all text-right outline-none"
+                                                >
+                                                   <Trash2 size={12} />
+                                                </button>
+                                             </div>
+                                          </td>
+                                       </tr>
+                                    );
+                                 })
+                              )}
+                           </tbody>
+                        </table>
+                     </div>
+                  </div>
+
+                  {/* Dropzone Footer inside Dashboard */}
+                  <div 
+                     onDragOver={e => e.preventDefault()} 
+                     onDrop={e => { e.preventDefault(); handleMultipleFiles(e.dataTransfer.files); }}
+                     onClick={() => document.getElementById("dashboard-upload")?.click()}
+                     className="border border-dashed border-gray-300 hover:border-[#1677FF] bg-white rounded-[2px] py-6 text-center cursor-pointer transition-all duration-200 group flex flex-col items-center justify-center p-4 shadow-2xs"
+                  >
+                     <Upload size={18} className="text-gray-400 group-hover:text-[#1677FF] transition-all mb-1 animate-bounce" />
+                     <p className="text-[11px] font-bold text-gray-500">拖拽多份大批量合同/图片到此处，或点击直接上传，开始并发多线程解析</p>
+                  </div>
+               </div>
+            )
+         ) : (
+            <div className="flex-1 flex flex-col lg:flex-row w-full relative overflow-hidden bg-[#F4F8FB]">
          {/* Preview (Adaptive Column) */}
          <div className="w-full lg:w-[42%] xl:w-[40%] flex flex-col min-h-0 border-r border-[#D1D5DB] bg-white lg:bg-transparent">
              <div className="h-[36px] px-4 flex items-center justify-between border-b border-[#D1D5DB] bg-white">
@@ -966,6 +1579,8 @@ export function SalesOrderModule({
                )}
             </div>
          </div>
+       </div>
+       )}
       </div>
 
       <SuccessModal 

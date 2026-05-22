@@ -113,9 +113,11 @@ export function OrdersModule({
   const [loading, setLoading] = useState(true);
   const [attachmentViewerOpen, setAttachmentViewerOpen] = useState(false);
   const [currentAttachments, setCurrentAttachments] = useState<string[]>([]);
+  const [currentAttachmentOrderId, setCurrentAttachmentOrderId] = useState<string>("");
 
   const handleOpenAttachments = (
     e: React.MouseEvent,
+    orderId: string,
     attachments?: string[],
   ) => {
     e.stopPropagation();
@@ -123,6 +125,7 @@ export function OrdersModule({
       attachments && attachments.length > 0
         ? attachments
         : ["mock:未命名附件.pdf"];
+    setCurrentAttachmentOrderId(orderId);
     setCurrentAttachments(atts);
     setAttachmentViewerOpen(true);
   };
@@ -368,6 +371,16 @@ export function OrdersModule({
 
       if (mockEligible.length > 0) {
         deleteDemoOrders(mockEligible.map((o) => o.id));
+      }
+
+      // Clean up attachment db
+      try {
+        const { AttachmentStore } = await import("@/src/lib/attachmentDb");
+        for (const o of eligibleToDelete) {
+          await AttachmentStore.delete(o.id);
+        }
+      } catch (err) {
+        console.warn("IndexedDB delete failed:", err);
       }
 
       setOrders(
@@ -730,7 +743,7 @@ export function OrdersModule({
                   <InfoField label="送货联系人" value={selectedOrder.contactPerson} />
                   <InfoField label="送货联系电话" value={selectedOrder.contactPhone} />
                   
-                  <InfoField label="附件" value={(selectedOrder.attachments && selectedOrder.attachments.length > 0) ? "点击预览" : "无附件"} isLink onLinkClick={(e: any) => handleOpenAttachments(e, selectedOrder.attachments)} />
+                  <InfoField label="附件" value="点击预览" isLink onLinkClick={(e: any) => handleOpenAttachments(e, selectedOrder.id, selectedOrder.attachments)} />
                   <InfoField label="合同不含税总金额" value={selectedOrder.currency === "CNY" ? (selectedOrder.items || []).reduce((s, i) => s + (i.amountNet || 0), 0)?.toLocaleString("zh-CN", { minimumFractionDigits: 2 }) : (selectedOrder.items || []).reduce((s, i) => s + (i.amountNet || 0), 0)?.toFixed(2)} />
                   <InfoField label="合同税额总金额" value={selectedOrder.currency === "CNY" ? (selectedOrder.items || []).reduce((s, i) => s + (i.taxAmount || 0), 0)?.toLocaleString("zh-CN", { minimumFractionDigits: 2 }) : (selectedOrder.items || []).reduce((s, i) => s + (i.taxAmount || 0), 0)?.toFixed(2)} />
                   <InfoField label="合同总金额" value={selectedOrder.currency === "CNY" ? totalOrderAmount?.toLocaleString("zh-CN", { minimumFractionDigits: 2 }) : totalOrderAmount?.toFixed(2)} />
@@ -1039,12 +1052,12 @@ export function OrdersModule({
                         <td className="px-3 text-center">
                           <button
                             onClick={(e) =>
-                              handleOpenAttachments(e, order.attachments)
+                              handleOpenAttachments(e, order.id, order.attachments)
                             }
                             className="p-1 hover:bg-sap-blue/10 rounded-[2px] transition-colors text-gray-400 hover:text-sap-blue flex items-center justify-center mx-auto"
                           >
                             <Paperclip size={12} />
-                            <span className="text-[9px] ml-0.5">{order.attachments?.[0] || "原始文档"}</span>
+                            <span className="text-[9px] ml-0.5">{(order.attachments && order.attachments.length > 0 && !order.attachments[0].startsWith('data:')) ? order.attachments[0] : "原始文档"}</span>
                           </button>
                         </td>
                         <td className="px-3">
@@ -1251,6 +1264,7 @@ export function OrdersModule({
         isOpen={attachmentViewerOpen}
         onClose={() => setAttachmentViewerOpen(false)}
         attachments={currentAttachments}
+        orderId={currentAttachmentOrderId}
       />
     </div>
   );

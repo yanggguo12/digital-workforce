@@ -14,18 +14,36 @@ export interface ModelProviderConfig {
   settings: ModelSettings;
 }
 
+export interface SystemModels {
+  inference: string;
+  embedding: string;
+  rerank: string;
+  speech2text: string;
+  tts: string;
+}
+
 interface ModelContextType {
   defaultProvider: string;
   activeModel: string;
   setDefaultProvider: (provider: string) => void;
   setActiveModelForProvider: (providerId: string, model: string) => void;
   providerConfigs: Record<string, ModelProviderConfig>;
+  systemModels: SystemModels;
+  setSystemModels: (models: SystemModels) => void;
 }
 
 const ModelContext = createContext<ModelContextType | undefined>(undefined);
 
 export function ModelProvider({ children }: { children: ReactNode }) {
   const [defaultProvider, setDefaultProvider] = useState('Gemini');
+  const [systemModels, setSystemModels] = useState<SystemModels>({
+    inference: 'gpt-4',
+    embedding: 'text-embedding-3-small',
+    rerank: 'rerank-english-v2.0',
+    speech2text: 'whisper-1',
+    tts: 'tts-1-hd'
+  });
+  
   const [providerConfigs, setProviderConfigs] = useState<Record<string, ModelProviderConfig>>({
     'Gemini': {
       id: 'Gemini',
@@ -59,7 +77,9 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       activeModel, 
       setDefaultProvider, 
       setActiveModelForProvider,
-      providerConfigs 
+      providerConfigs,
+      systemModels,
+      setSystemModels
     }}>
       {children}
     </ModelContext.Provider>
