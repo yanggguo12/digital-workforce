@@ -802,14 +802,14 @@ export function SalesOrderModule({
                   <span className="w-1 h-3 bg-[#1677FF]" />
                   智能录单列表
                </span>
-               <div className="flex items-center gap-2">
+               <div className="flex items-center gap-1.5">
                   <span className="text-[10px] px-1.5 py-0.5 bg-gray-100 text-[#1677FF] border border-[#1677FF]/10 rounded font-bold font-mono">
                      {tasks.length} 份
                   </span>
                   <button 
                      onClick={() => setIsSidebarCollapsed(true)}
-                     className="p-1 hover:bg-gray-100 rounded text-gray-400 hover:text-gray-700 transition-colors cursor-pointer"
-                     title="收起智能录单列表"
+                     className="p-1 hover:bg-gray-100 rounded text-gray-400 hover:text-gray-700 transition-colors cursor-pointer flex items-center justify-center"
+                     title="收起列表"
                   >
                      <ChevronLeft size={13} />
                   </button>
@@ -823,7 +823,7 @@ export function SalesOrderModule({
                    document.getElementById("sidebar-upload")?.click();
                 }, 50);
               }} 
-              className="w-full flex items-center justify-center gap-2 px-4 h-[34px] bg-[#1677FF] hover:bg-[#0050B3] text-white rounded-[2px] text-xs font-bold transition-all shadow-[0_2px_4px_rgba(22,119,255,0.1)] outline-none"
+              className="w-full flex items-center justify-center gap-2 px-4 h-[34px] bg-[#1677FF] hover:bg-[#0050B3] text-white rounded-[2px] text-xs font-bold transition-all shadow-[0_2px_4px_rgba(22,119,255,0.1)] outline-none cursor-pointer"
             >
                <Plus size={14}/> 上传订单文件
             </button>
@@ -1131,16 +1131,12 @@ export function SalesOrderModule({
                            在此直观监控所有订单合同置信度、AI 提取状态，支持跨单据极速筛选与集中核对。
                         </p>
                      </div>
-                     <div className="flex items-center gap-2 shrink-0">
+                     <div className="shrink-0 flex items-center text-[10px] text-gray-500 font-medium">
                         <input type="file" multiple id="dashboard-upload" className="hidden" onChange={e => { if (e.target.files) handleMultipleFiles(e.target.files); }} />
-                        <button 
-                           onClick={() => document.getElementById("dashboard-upload")?.click()}
-                           className="flex items-center gap-1.5 px-3 py-1.5 border border-[#1677FF]/20 bg-[#1677FF]/5 hover:bg-[#1677FF]/10 text-xs text-[#1677FF] font-bold rounded-[2px] transition-all outline-none"
-                        >
-                           <Plus size={13} />
-                           解析新单据
-                        </button>
-                      </div>
+                        <span className="inline-flex items-center gap-1.5 bg-[#1677FF]/5 border border-[#1677FF]/10 text-[#1677FF] px-2.5 py-1 rounded-[2px] font-bold font-sans">
+                           ✨ 批量推送将智能跳过置信度低或状态异常的订单以防差错
+                        </span>
+                     </div>
                   </div>
 
                   {/* KPI Highlights */}
@@ -1210,30 +1206,6 @@ export function SalesOrderModule({
                            </div>
                         );
                      })}
-                  </div>
-
-                  {/* Compact Quick Operations Bar */}
-                  <div className="bg-white border border-[#E2E8F0] p-3 rounded-[2px] flex flex-col md:flex-row items-center justify-between gap-3 shadow-xs">
-                     <div className="flex items-center gap-2">
-                        <span className="text-xs text-gray-500 font-bold">批处理快速操作:</span>
-                        <div className="flex items-center gap-1.5">
-                           <Button variant="outline" size="sm" onClick={() => handleBatchAction("draft")} isLoading={isSaving} className="h-[28px] font-bold text-[10px] px-2 rounded-[2px] border-gray-200 text-gray-600">
-                              <Save size={11} className="mr-1"/> 批量存为草稿
-                           </Button>
-                           <Button variant="primary" size="sm" onClick={() => handleBatchAction("synced")} isLoading={isSaving} className="h-[28px] font-bold text-[10px] px-3 rounded-[2px] bg-[#1677FF] hover:bg-[#0050B3]">
-                              <Send size={11} className="mr-1"/> 批量推送 SAP
-                           </Button>
-                           <button
-                              onClick={() => onViewOrders?.("全部条目")}
-                              className="h-[28px] border border-[#1677FF]/40 text-[#1677FF] hover:text-[#0050B3] hover:border-[#1677FF] hover:bg-[#1677FF]/5 font-bold text-[10px] px-2.5 rounded-[2px] transition-all flex items-center gap-1 cursor-pointer bg-white"
-                              title="前往合同管理中心，查看全部合同"
-                           >
-                              <FileText size={11}/>
-                              <span>管理历史合同</span>
-                           </button>
-                        </div>
-                     </div>
-                     <span className="text-[10px] text-gray-400 font-medium font-sans">✨ 批量操作将智能跳过置信度低于 95% 或存在解析状态异常的订单，防差错联锁兜底</span>
                   </div>
 
                   {/* Bulk Data Grid */}
